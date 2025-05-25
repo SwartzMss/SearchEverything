@@ -2,35 +2,47 @@ name: Build
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
   build:
     runs-on: windows-latest
+    
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v3
-
-      - name: Set up Qt
-        uses: jurplel/install-qt-action@v3
-        with:
-          version: '6.5.0'
-          host: 'windows'
-          target: 'desktop'
-          arch: 'win64_msvc2019_64'
-
-      - name: Set up MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Build with qmake
-        run: |
-          qmake
-          nmake
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v3
-        with:
-          name: SearchEverything-exe
-          path: release/ 
+    - uses: actions/checkout@v4
+    
+    - name: Setup Qt
+      uses: jurplel/install-qt-action@v4
+      with:
+        version:      '6.8.2'
+        host:         'windows'
+        target:       'desktop'
+        arch:         'win64_msvc2022_64'
+        modules:      'qtcharts qtnetworkauth qtmultimedia'
+        install-deps: true
+        dir:          'C:/Qt'
+    
+    - name: Setup MSVC
+      uses: ilammy/msvc-dev-cmd@v1
+    
+    - name: Configure
+      shell: cmd
+      run: |
+        set PATH=C:\Qt\6.8.2\msvc2022_64\bin;%PATH%
+        qmake
+        
+    - name: Build
+      shell: cmd
+      run: |
+        nmake
+        
+    - name: Upload Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: MeetingAssistant
+        path: |
+          release/*.exe
+          release/*.dll
+        retention-days: 30 
