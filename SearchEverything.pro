@@ -9,10 +9,14 @@ TEMPLATE = app
 
 SOURCES += \
     main.cpp \
-    mainwindow.cpp
+    mainwindow.cpp \
+    searchworker.cpp \
+    exportworker.cpp
 
 HEADERS += \
-    mainwindow.h
+    mainwindow.h \
+    searchworker.h \
+    exportworker.h
 
 # 默认规则用于调试
 qnx: target.path = /tmp/$${TARGET}/bin

@@ -8,6 +8,8 @@
 #include <QRadioButton>
 #include <QProcess>
 #include <QThread>
+#include "searchworker.h"
+#include "exportworker.h"
 #include <QFileDialog>
 #include <QMessageBox>
 #include <QFile>
@@ -31,8 +33,9 @@ private slots:
     void onSearchClicked();
     void onStopClicked();
     void onExportClicked();
+    void onExportFinished(bool success);
     void onSearchFinished(int exitCode, QProcess::ExitStatus exitStatus);
-    void onSearchOutput();
+    void onSearchResult(const QString &name, const QString &path);
     void onResultTableContextMenuRequested(const QPoint &pos);
     void onOpenPathAction();
     void onCheckRgVersionClicked();
@@ -66,8 +69,10 @@ private:
     QMenu *resultTableMenu;
     QLineEdit *cmdDisplayEdit;
 
-    QProcess *searchProcess;
-    QProcess* exportProcess = nullptr;
+    QThread *searchThread = nullptr;
+    SearchWorker *searchWorker = nullptr;
+    QThread *exportThread = nullptr;
+    ExportWorker *exportWorker = nullptr;
     QString currentPath;
     QString rgExePath;
     bool isSearching;
