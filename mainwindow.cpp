@@ -21,11 +21,9 @@
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
-    , searchProcess(nullptr)
     , isSearching(false)
     , logFile(QCoreApplication::applicationDirPath() + "/SearchEverything.log")
     , logStream(&logFile)
-    , exportProcess(nullptr)
 {
     setupUI();
     setWindowTitle("SearchEverything");
@@ -44,9 +42,16 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    if (searchProcess) {
-        searchProcess->kill();
-        delete searchProcess;
+    if (searchThread) {
+        searchWorker->stop();
+        searchThread->quit();
+        searchThread->wait();
+        delete searchThread;
+    }
+    if (exportThread) {
+        exportThread->quit();
+        exportThread->wait();
+        delete exportThread;
     }
     if (logFile.isOpen()) {
         logFile.close();
@@ -298,14 +303,19 @@ void MainWindow::onSearchClicked()
 
 void MainWindow::startSearch()
 {
-    if (searchProcess) {
-        delete searchProcess;
+    if (searchThread) {
+        searchWorker->stop();
+        searchThread->quit();
+        searchThread->wait();
+        delete searchThread;
     }
 
-    searchProcess = new QProcess(this);
-    connect(searchProcess, &QProcess::readyReadStandardOutput, this, &MainWindow::onSearchOutput);
-    connect(searchProcess, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, &MainWindow::onSearchFinished);
+    searchWorker = new SearchWorker;
+    searchThread = new QThread(this);
+    searchWorker->moveToThread(searchThread);
+    connect(searchThread, &QThread::finished, searchWorker, &QObject::deleteLater);
+    connect(searchWorker, &SearchWorker::resultFound, this, &MainWindow::onSearchResult);
+    connect(searchWorker, &SearchWorker::finished, this, &MainWindow::onSearchFinished);
 
     QStringList arguments;
     QString searchText = searchEdit->text();
@@ -339,8 +349,10 @@ void MainWindow::startSearch()
     writeLog(QString("[搜索] %1").arg(cmdDisplayEdit->text()));
 
     resultTable->setRowCount(0);
-    searchProcess->setProcessChannelMode(QProcess::MergedChannels);
-    searchProcess->start(rgExePath, arguments);
+    searchThread->start();
+    QMetaObject::invokeMethod(searchWorker, "start", Qt::QueuedConnection,
+                              Q_ARG(QString, rgExePath),
+                              Q_ARG(QStringList, arguments));
     
     isSearching = true;
     updateButtonsState();
@@ -354,8 +366,13 @@ void MainWindow::onStopClicked()
 
 void MainWindow::stopSearch()
 {
-    if (searchProcess && isSearching) {
-        searchProcess->kill();
+    if (searchThread && isSearching) {
+        searchWorker->stop();
+        searchThread->quit();
+        searchThread->wait();
+        delete searchThread;
+        searchThread = nullptr;
+        searchWorker = nullptr;
         isSearching = false;
         updateButtonsState();
         updateResultCount();
@@ -367,6 +384,13 @@ void MainWindow::onSearchFinished(int exitCode, QProcess::ExitStatus exitStatus)
 {
     writeLog(QString("[onSearchFinished] exitCode: %1, exitStatus: %2").arg(exitCode).arg(exitStatus));
     isSearching = false;
+    if (searchThread) {
+        searchThread->quit();
+        searchThread->wait();
+        delete searchThread;
+        searchThread = nullptr;
+        searchWorker = nullptr;
+    }
     updateButtonsState();
     if (exitStatus == QProcess::NormalExit) {
         if (exitCode == 0) {
@@ -385,34 +409,14 @@ void MainWindow::onSearchFinished(int exitCode, QProcess::ExitStatus exitStatus)
     }
 }
 
-void MainWindow::onSearchOutput()
+void MainWindow::onSearchResult(const QString &name, const QString &path)
 {
-    writeLog("[onSearchOutput] called");
-    if (searchProcess) {
-        QString output = QString::fromUtf8(searchProcess->readAllStandardOutput());
-        writeLog("[onSearchOutput] output: " + output);
-        QStringList lines = output.split("\n", Qt::SkipEmptyParts);
-        for (const QString &line : lines) {
-            QString fullPath = line.trimmed();
-            if (!fullPath.isEmpty()) {
-                if (fullPath.contains("拒绝访问") || fullPath.contains("os error 5")) {
-                    // 过滤系统拒绝访问的输出，不写路径不存在日志
-                    continue;
-                }
-                QFileInfo info(fullPath);
-                if (info.exists()) {
-                    int row = resultTable->rowCount();
-                    resultTable->insertRow(row);
-                    resultTable->setItem(row, 0, new QTableWidgetItem(info.fileName()));
-                    resultTable->setItem(row, 1, new QTableWidgetItem(info.absolutePath()));
-                } else {
-                    writeLog("[onSearchOutput] 路径不存在: " + fullPath);
-                }
-            }
-        }
-        resultTable->sortItems(0, Qt::AscendingOrder);
-        updateResultCount();
-    }
+    int row = resultTable->rowCount();
+    resultTable->insertRow(row);
+    resultTable->setItem(row, 0, new QTableWidgetItem(name));
+    resultTable->setItem(row, 1, new QTableWidgetItem(path));
+    resultTable->sortItems(0, Qt::AscendingOrder);
+    updateResultCount();
 }
 
 void MainWindow::onExportClicked()
@@ -427,7 +431,6 @@ void MainWindow::onExportClicked()
         "文本文件 (*.txt);;CSV文件 (*.csv)");
 
     if (!fileName.isEmpty()) {
-        // 重新拼接rg.exe命令参数
         QStringList arguments;
         QString searchText = searchEdit->text();
         QString fileType = fileTypeEdit->text();
@@ -454,27 +457,24 @@ void MainWindow::onExportClicked()
         arguments << "--glob=!swapfile.sys";
         arguments << currentPath;
 
-        QProcess exportProcess;
-        exportProcess.setProcessChannelMode(QProcess::MergedChannels);
-        exportProcess.setStandardOutputFile(fileName, QIODevice::Truncate);
+        if (exportThread) {
+            exportThread->quit();
+            exportThread->wait();
+            delete exportThread;
+        }
+
+        exportWorker = new ExportWorker;
+        exportThread = new QThread(this);
+        exportWorker->moveToThread(exportThread);
+        connect(exportThread, &QThread::finished, exportWorker, &QObject::deleteLater);
+        connect(exportWorker, &ExportWorker::finished, this, &MainWindow::onExportFinished);
         writeLog(QString("[导出] rgExePath: %1, arguments: %2, output: %3").arg(rgExePath, arguments.join(" "), fileName));
         statusBarWidget->showMessage("正在导出，请等待...");
-        exportProcess.start(rgExePath, arguments);
-        bool ok = exportProcess.waitForFinished(-1);
-        QString err = QString::fromUtf8(exportProcess.readAllStandardError());
-        if (!err.isEmpty()) {
-            writeLog("[导出stderr] " + err);
-        }
-        QFileInfo fi(fileName);
-        if (ok && exportProcess.exitCode() == 0 && fi.exists() && fi.size() > 0) {
-            QMessageBox::information(this, "成功", "搜索结果已成功导出！");
-            statusBarWidget->showMessage("导出完成");
-            writeLog("[导出完成] 正常退出，结果已保存。");
-        } else {
-            QMessageBox::critical(this, "错误", "rg.exe 执行导出时出错，或文件未生成/为空！");
-            statusBarWidget->showMessage("导出失败");
-            writeLog(QString("[导出失败] exitCode: %1, ok: %2, file: %3, size: %4").arg(exportProcess.exitCode()).arg(ok).arg(fileName).arg(fi.size()));
-        }
+        exportThread->start();
+        QMetaObject::invokeMethod(exportWorker, "start", Qt::QueuedConnection,
+                                  Q_ARG(QString, rgExePath),
+                                  Q_ARG(QStringList, arguments),
+                                  Q_ARG(QString, fileName));
     }
 }
 
@@ -513,6 +513,26 @@ void MainWindow::onOpenPathAction()
         QDesktopServices::openUrl(QUrl::fromLocalFile(filePath));
     }
     updateResultCount();
+}
+
+void MainWindow::onExportFinished(bool success)
+{
+    if (exportThread) {
+        exportThread->quit();
+        exportThread->wait();
+        delete exportThread;
+        exportThread = nullptr;
+        exportWorker = nullptr;
+    }
+    if (success) {
+        QMessageBox::information(this, "成功", "搜索结果已成功导出！");
+        statusBarWidget->showMessage("导出完成");
+        writeLog("[导出完成] 正常退出，结果已保存。");
+    } else {
+        QMessageBox::critical(this, "错误", "rg.exe 执行导出时出错，或文件未生成/为空！");
+        statusBarWidget->showMessage("导出失败");
+        writeLog("[导出失败]");
+    }
 }
 
 void MainWindow::onCheckRgVersionClicked()
