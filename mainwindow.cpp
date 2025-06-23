@@ -266,10 +266,11 @@ void MainWindow::updateButtonsState()
 {
     bool hasRgExe = checkRgExe(false);
     bool hasSearchDir = !currentPath.isEmpty();
+    bool hasFileType = !fileTypeEdit->text().trimmed().isEmpty();
     browseButton->setEnabled(hasRgExe);
-    searchButton->setEnabled(hasRgExe && hasSearchDir && !isSearching);
+    searchButton->setEnabled(hasRgExe && hasSearchDir && hasFileType && !isSearching);
     stopButton->setEnabled(isSearching);
-    exportButton->setEnabled(hasRgExe && hasSearchDir);
+    exportButton->setEnabled(hasRgExe && hasSearchDir && hasFileType);
 }
 
 bool MainWindow::checkRgExe(bool showWarning)
@@ -293,6 +294,13 @@ void MainWindow::onSearchClicked()
 
     if (currentPath.isEmpty()) {
         QString msg = "请先选择搜索目录！";
+        QMessageBox::warning(this, "警告", msg);
+        writeLog("[警告] " + msg);
+        return;
+    }
+
+    if (fileTypeEdit->text().trimmed().isEmpty()) {
+        QString msg = "请先设置文件类型过滤！";
         QMessageBox::warning(this, "警告", msg);
         writeLog("[警告] " + msg);
         return;
@@ -422,6 +430,12 @@ void MainWindow::onSearchResult(const QString &name, const QString &path)
 void MainWindow::onExportClicked()
 {
     if (!checkRgExe(true)) {
+        return;
+    }
+
+    if (fileTypeEdit->text().trimmed().isEmpty()) {
+        QMessageBox::warning(this, "警告", "请先设置文件类型过滤！");
+        writeLog("[警告] 请先设置文件类型过滤！");
         return;
     }
 
