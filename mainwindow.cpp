@@ -18,6 +18,18 @@
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QProcess>
+#include <QSystemTrayIcon>
+#include <QApplication>
+#include <QCheckBox>
+#include <QCloseEvent>
+#include <QSettings>
+#include <QStyle>
+#include <QSignalBlocker>
+#include <QPainter>
+#include <QPixmap>
+#include <QPainterPath>
+#include <QVector>
+#include <QPointF>
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
@@ -26,8 +38,15 @@ MainWindow::MainWindow(QWidget *parent)
     , logStream(&logFile)
 {
     setupUI();
+    QIcon appIcon = watermelonIcon();
+    setWindowIcon(appIcon);
+    createTrayIcon();
+    if (trayIcon) {
+        setAttribute(Qt::WA_QuitOnClose, false);
+    }
     setWindowTitle("SearchEverything");
     resize(800, 600);
+    applyAutoStartSetting(autoStartCheckBox ? autoStartCheckBox->isChecked() : true);
 
     // 打开日志文件（追加模式）
     if (!logFile.open(QIODevice::Append | QIODevice::Text)) {
@@ -55,6 +74,9 @@ MainWindow::~MainWindow()
     }
     if (logFile.isOpen()) {
         logFile.close();
+    }
+    if (trayIcon) {
+        trayIcon->hide();
     }
 }
 
@@ -135,6 +157,10 @@ void MainWindow::setupUI()
     buttonLayout->addWidget(exportButton);
     mainLayout->addLayout(buttonLayout);
 
+    autoStartCheckBox = new QCheckBox("开机自启动", this);
+    autoStartCheckBox->setChecked(true);
+    mainLayout->addWidget(autoStartCheckBox);
+
     // 结果显示区域（表格）
     resultTable = new QTableWidget(this);
     resultTable->setColumnCount(2);
@@ -172,6 +198,7 @@ void MainWindow::setupUI()
     connect(fixedStringRadio, &QRadioButton::toggled, this, &MainWindow::updateButtonsState);
     connect(regexRadio, &QRadioButton::toggled, this, &MainWindow::updateButtonsState);
     connect(checkRgVersionButton, &QPushButton::clicked, this, &MainWindow::onCheckRgVersionClicked);
+    connect(autoStartCheckBox, &QCheckBox::toggled, this, &MainWindow::onAutoStartToggled);
 }
 
 void MainWindow::loadConfig()
@@ -204,6 +231,15 @@ void MainWindow::loadConfig()
                 }
             }
         }
+        bool autoStartEnabled = true;
+        if (obj.contains("auto_start")) {
+            autoStartEnabled = obj["auto_start"].toBool(true);
+        }
+        if (autoStartCheckBox) {
+            QSignalBlocker blocker(autoStartCheckBox);
+            autoStartCheckBox->setChecked(autoStartEnabled);
+        }
+        applyAutoStartSetting(autoStartCheckBox ? autoStartCheckBox->isChecked() : true);
         
         configFile.close();
     }
@@ -224,11 +260,100 @@ void MainWindow::saveConfig()
         QJsonArray dirs;
         dirs.append(currentPath);
         obj["search_directories"] = dirs;
+        if (autoStartCheckBox) {
+            obj["auto_start"] = autoStartCheckBox->isChecked();
+        }
         
         QJsonDocument doc(obj);
         configFile.write(doc.toJson());
         configFile.close();
     }
+}
+
+QIcon MainWindow::watermelonIcon() const
+{
+    QPixmap pixmap(128, 128);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing);
+
+    QRectF outer(8, 8, 112, 112);
+    painter.setBrush(QColor(54, 125, 65));
+    painter.setPen(Qt::NoPen);
+    painter.drawEllipse(outer);
+
+    QRectF middle = outer.adjusted(6, 6, -6, -6);
+    painter.setBrush(QColor(125, 201, 109));
+    painter.drawEllipse(middle);
+
+    QRectF flesh = middle.adjusted(10, 10, -10, -10);
+    painter.setBrush(QColor(255, 94, 112));
+    painter.drawEllipse(flesh);
+
+    painter.setBrush(QColor(40, 40, 40));
+    QVector<QPointF> seeds = {
+        QPointF(64, 48), QPointF(84, 62), QPointF(44, 62),
+        QPointF(64, 82), QPointF(90, 94), QPointF(38, 94)
+    };
+    for (const QPointF &seedCenter : seeds) {
+        QRectF seedRect(seedCenter.x() - 4, seedCenter.y() - 8, 8, 16);
+        painter.drawEllipse(seedRect);
+    }
+
+    painter.setBrush(QColor(255, 255, 255, 80));
+    QPainterPath highlight;
+    highlight.addEllipse(QRectF(flesh.left() + 8, flesh.top() + 8, 30, 30));
+    painter.fillPath(highlight, painter.brush());
+
+    return QIcon(pixmap);
+}
+
+void MainWindow::createTrayIcon()
+{
+    if (!QSystemTrayIcon::isSystemTrayAvailable()) {
+        QMessageBox::warning(this, "系统托盘不可用", "当前系统不支持系统托盘，程序将无法最小化到托盘。\n请升级系统或启用托盘功能。");
+        return;
+    }
+
+    if (trayIcon) {
+        return;
+    }
+
+    trayIcon = new QSystemTrayIcon(this);
+    QIcon icon = windowIcon();
+    if (icon.isNull()) {
+        icon = QIcon::fromTheme("system-search", style()->standardIcon(QStyle::SP_FileDialogContentsView));
+    }
+    trayIcon->setIcon(icon);
+    trayIcon->setToolTip(windowTitle());
+
+    trayMenu = new QMenu(this);
+    showMainWindowAction = trayMenu->addAction(QIcon::fromTheme("window-restore"), "显示主界面");
+    exitAppAction = trayMenu->addAction(QIcon::fromTheme("application-exit"), "退出程序");
+    connect(showMainWindowAction, &QAction::triggered, this, &MainWindow::onShowMainWindow);
+    connect(exitAppAction, &QAction::triggered, this, &MainWindow::onExitRequested);
+
+    trayIcon->setContextMenu(trayMenu);
+    connect(trayIcon, &QSystemTrayIcon::activated, this, &MainWindow::onTrayIconActivated);
+    trayIcon->show();
+}
+
+void MainWindow::applyAutoStartSetting(bool enabled)
+{
+#ifdef Q_OS_WIN
+    QString keyPath = "HKEY_CURRENT_USER/Software/Microsoft/Windows/CurrentVersion/Run";
+    QSettings settings(keyPath, QSettings::NativeFormat);
+    QString valueName = QCoreApplication::applicationName();
+    QString exePath = QDir::toNativeSeparators(QCoreApplication::applicationFilePath());
+    if (enabled) {
+        settings.setValue(valueName, '"' + exePath + '"');
+    } else {
+        settings.remove(valueName);
+    }
+#else
+    Q_UNUSED(enabled);
+#endif
 }
 
 void MainWindow::onBrowseRgClicked()
@@ -574,4 +699,64 @@ void MainWindow::onCheckRgVersionClicked()
     } else {
         QMessageBox::information(this, "rg.exe 版本", version + "\n\n建议使用 13.0 及以上版本以获得最佳体验。");
     }
-} 
+}
+
+void MainWindow::onTrayIconActivated(QSystemTrayIcon::ActivationReason reason)
+{
+    if (reason == QSystemTrayIcon::Trigger || reason == QSystemTrayIcon::DoubleClick) {
+        onShowMainWindow();
+    }
+}
+
+void MainWindow::onShowMainWindow()
+{
+    showNormal();
+    activateWindow();
+    raise();
+}
+
+void MainWindow::onExitRequested()
+{
+    QMessageBox::StandardButton result = QMessageBox::question(
+        this,
+        "退出确认",
+        "确定要退出 SearchEverything 吗？\n\n退出后将无法从托盘恢复界面。",
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::No);
+    if (result == QMessageBox::Yes) {
+        allowClose = true;
+        if (trayIcon) {
+            trayIcon->hide();
+        }
+        close();
+    }
+}
+
+void MainWindow::onAutoStartToggled(bool checked)
+{
+    applyAutoStartSetting(checked);
+    writeLog(QString("[自启动] %1").arg(checked ? "已开启开机自启动" : "已关闭开机自启动"));
+    saveConfig();
+}
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    if (allowClose || !trayIcon) {
+        event->accept();
+        return;
+    }
+
+    event->ignore();
+    hide();
+    if (trayIcon) {
+        trayIcon->show();
+        if (!trayMessageShown) {
+            trayIcon->showMessage(
+                windowTitle(),
+                "程序仍在后台运行，可在托盘图标中重新打开或退出。",
+                QSystemTrayIcon::Information,
+                3000);
+            trayMessageShown = true;
+        }
+    }
+}
