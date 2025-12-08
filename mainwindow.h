@@ -20,7 +20,6 @@
 #include <QMenu>
 #include <QSystemTrayIcon>
 #include <QAction>
-#include <QCheckBox>
 #include <QCloseEvent>
 
 class MainWindow : public QMainWindow
@@ -83,7 +82,7 @@ private:
     QMenu *trayMenu = nullptr;
     QAction *showMainWindowAction = nullptr;
     QAction *exitAppAction = nullptr;
-    QCheckBox *autoStartCheckBox = nullptr;
+    QAction *autoStartAction = nullptr;
 
     QThread *searchThread = nullptr;
     SearchWorker *searchWorker = nullptr;
@@ -94,6 +93,7 @@ private:
     bool isSearching;
     bool allowClose = false;
     bool trayMessageShown = false;
+    bool autoStartEnabled = true;
 
     QFile logFile;
     QTextStream logStream;

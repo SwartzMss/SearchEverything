@@ -20,7 +20,6 @@
 #include <QProcess>
 #include <QSystemTrayIcon>
 #include <QApplication>
-#include <QCheckBox>
 #include <QCloseEvent>
 #include <QSettings>
 #include <QStyle>
@@ -46,7 +45,6 @@ MainWindow::MainWindow(QWidget *parent)
     }
     setWindowTitle("SearchEverything");
     resize(800, 600);
-    applyAutoStartSetting(autoStartCheckBox ? autoStartCheckBox->isChecked() : true);
 
     // 打开日志文件（追加模式）
     if (!logFile.open(QIODevice::Append | QIODevice::Text)) {
@@ -157,10 +155,6 @@ void MainWindow::setupUI()
     buttonLayout->addWidget(exportButton);
     mainLayout->addLayout(buttonLayout);
 
-    autoStartCheckBox = new QCheckBox("开机自启动", this);
-    autoStartCheckBox->setChecked(true);
-    mainLayout->addWidget(autoStartCheckBox);
-
     // 结果显示区域（表格）
     resultTable = new QTableWidget(this);
     resultTable->setColumnCount(2);
@@ -198,7 +192,6 @@ void MainWindow::setupUI()
     connect(fixedStringRadio, &QRadioButton::toggled, this, &MainWindow::updateButtonsState);
     connect(regexRadio, &QRadioButton::toggled, this, &MainWindow::updateButtonsState);
     connect(checkRgVersionButton, &QPushButton::clicked, this, &MainWindow::onCheckRgVersionClicked);
-    connect(autoStartCheckBox, &QCheckBox::toggled, this, &MainWindow::onAutoStartToggled);
 }
 
 void MainWindow::loadConfig()
@@ -231,18 +224,19 @@ void MainWindow::loadConfig()
                 }
             }
         }
-        bool autoStartEnabled = true;
         if (obj.contains("auto_start")) {
             autoStartEnabled = obj["auto_start"].toBool(true);
+        } else {
+            autoStartEnabled = true;
         }
-        if (autoStartCheckBox) {
-            QSignalBlocker blocker(autoStartCheckBox);
-            autoStartCheckBox->setChecked(autoStartEnabled);
+        if (autoStartAction) {
+            QSignalBlocker blocker(autoStartAction);
+            autoStartAction->setChecked(autoStartEnabled);
         }
-        applyAutoStartSetting(autoStartCheckBox ? autoStartCheckBox->isChecked() : true);
-        
         configFile.close();
     }
+
+    applyAutoStartSetting(autoStartEnabled);
 }
 
 void MainWindow::saveConfig()
@@ -260,9 +254,7 @@ void MainWindow::saveConfig()
         QJsonArray dirs;
         dirs.append(currentPath);
         obj["search_directories"] = dirs;
-        if (autoStartCheckBox) {
-            obj["auto_start"] = autoStartCheckBox->isChecked();
-        }
+        obj["auto_start"] = autoStartEnabled;
         
         QJsonDocument doc(obj);
         configFile.write(doc.toJson());
@@ -330,9 +322,14 @@ void MainWindow::createTrayIcon()
 
     trayMenu = new QMenu(this);
     showMainWindowAction = trayMenu->addAction(QIcon::fromTheme("window-restore"), "显示主界面");
+    autoStartAction = trayMenu->addAction(QIcon::fromTheme("system-run"), "开机自启动");
+    autoStartAction->setCheckable(true);
+    autoStartAction->setChecked(autoStartEnabled);
+    trayMenu->addSeparator();
     exitAppAction = trayMenu->addAction(QIcon::fromTheme("application-exit"), "退出程序");
     connect(showMainWindowAction, &QAction::triggered, this, &MainWindow::onShowMainWindow);
     connect(exitAppAction, &QAction::triggered, this, &MainWindow::onExitRequested);
+    connect(autoStartAction, &QAction::toggled, this, &MainWindow::onAutoStartToggled);
 
     trayIcon->setContextMenu(trayMenu);
     connect(trayIcon, &QSystemTrayIcon::activated, this, &MainWindow::onTrayIconActivated);
@@ -727,15 +724,20 @@ void MainWindow::onExitRequested()
         allowClose = true;
         if (trayIcon) {
             trayIcon->hide();
+            QCoreApplication::processEvents();
+            trayIcon->deleteLater();
+            trayIcon = nullptr;
         }
         close();
+        QCoreApplication::quit();
     }
 }
 
 void MainWindow::onAutoStartToggled(bool checked)
 {
-    applyAutoStartSetting(checked);
-    writeLog(QString("[自启动] %1").arg(checked ? "已开启开机自启动" : "已关闭开机自启动"));
+    autoStartEnabled = checked;
+    applyAutoStartSetting(autoStartEnabled);
+    writeLog(QString("[自启动] %1").arg(autoStartEnabled ? "已开启开机自启动" : "已关闭开机自启动"));
     saveConfig();
 }
 
