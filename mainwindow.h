@@ -18,6 +18,10 @@
 #include <QTableWidget>
 #include <QStatusBar>
 #include <QMenu>
+#include <QSystemTrayIcon>
+#include <QAction>
+#include <QCheckBox>
+#include <QCloseEvent>
 
 class MainWindow : public QMainWindow
 {
@@ -39,6 +43,10 @@ private slots:
     void onResultTableContextMenuRequested(const QPoint &pos);
     void onOpenPathAction();
     void onCheckRgVersionClicked();
+    void onTrayIconActivated(QSystemTrayIcon::ActivationReason reason);
+    void onShowMainWindow();
+    void onExitRequested();
+    void onAutoStartToggled(bool checked);
 
 private:
     void setupUI();
@@ -51,6 +59,9 @@ private:
     void updateResultCount();
     void loadConfig();
     void saveConfig();
+    void createTrayIcon();
+    void applyAutoStartSetting(bool enabled);
+    QIcon watermelonIcon() const;
 
     QLineEdit *rgPathEdit;
     QLineEdit *pathEdit;
@@ -68,6 +79,11 @@ private:
     QStatusBar *statusBarWidget;
     QMenu *resultTableMenu;
     QLineEdit *cmdDisplayEdit;
+    QSystemTrayIcon *trayIcon = nullptr;
+    QMenu *trayMenu = nullptr;
+    QAction *showMainWindowAction = nullptr;
+    QAction *exitAppAction = nullptr;
+    QCheckBox *autoStartCheckBox = nullptr;
 
     QThread *searchThread = nullptr;
     SearchWorker *searchWorker = nullptr;
@@ -76,9 +92,14 @@ private:
     QString currentPath;
     QString rgExePath;
     bool isSearching;
+    bool allowClose = false;
+    bool trayMessageShown = false;
 
     QFile logFile;
     QTextStream logStream;
+
+protected:
+    void closeEvent(QCloseEvent *event) override;
 };
 
-#endif // MAINWINDOW_H 
+#endif // MAINWINDOW_H
